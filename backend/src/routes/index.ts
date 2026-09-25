@@ -5,6 +5,7 @@ import jobRoutes from './jobs.routes';
 import applicationRoutes from './applications.routes';
 import resumeRoutes from './resumes.routes';
 import aiRoutes from './ai.routes';
+import ingestionRoutes from './ingestion.routes';
 
 const router = Router();
 
@@ -14,5 +15,6 @@ router.use('/jobs', jobRoutes);
 router.use('/applications', applicationRoutes);
 router.use('/resumes', resumeRoutes);
 router.use('/ai', aiRoutes);
+router.use('/ingestion', ingestionRoutes);
 
 export default router;
