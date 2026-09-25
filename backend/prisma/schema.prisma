@@ -7,8 +7,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ── Enums ─────────────────────────────────────────────────────
@@ -18,7 +19,7 @@ enum UserRole {
   ADMIN
 }
 
-enum JobStatus {
+enum ApplicationStatus {
   PENDING
   APPLYING
   APPLIED
@@ -28,13 +29,19 @@ enum JobStatus {
   WITHDRAWN
 }
 
-enum ApplicationSource {
+enum JobSource {
   LINKEDIN
   INDEED
   GLASSDOOR
   COMPANY_SITE
   REFERRAL
   OTHER
+}
+
+enum ScrapingStatus {
+  STARTED
+  SUCCESS
+  FAILED
 }
 
 // ── Models ────────────────────────────────────────────────────
@@ -49,7 +56,8 @@ model User {
   updatedAt    DateTime @updatedAt
 
   resumes      Resume[]
-  applications JobApplication[]
+  applications Application[]
+  scrapingLogs ScrapingLog[]
 
   @@map("users")
 }
@@ -63,45 +71,63 @@ model Resume {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  applications JobApplication[]
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  applications Application[]
 
   @@map("resumes")
 }
 
-model JobListing {
-  id          String            @id @default(cuid())
+model Job {
+  id          String    @id @default(cuid())
   title       String
   company     String
   location    String
-  description String            @db.Text
-  url         String            @unique
-  source      ApplicationSource
+  description String    @db.Text
+  url         String    @unique
+  source      JobSource
   salary      String?
   postedAt    DateTime?
-  createdAt   DateTime          @default(now())
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  applications JobApplication[]
+  applications Application[]
 
-  @@map("job_listings")
+  @@map("jobs")
 }
 
-model JobApplication {
-  id              String     @id @default(cuid())
-  userId          String
-  jobListingId    String
-  resumeId        String?
-  status          JobStatus  @default(PENDING)
-  coverLetter     String?    @db.Text
-  tailoredResume  String?    @db.Text
-  notes           String?    @db.Text
-  appliedAt       DateTime?
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
+model Application {
+  id             String            @id @default(cuid())
+  userId         String
+  jobId          String
+  resumeId       String?
+  status         ApplicationStatus @default(PENDING)
+  coverLetter    String?           @db.Text
+  tailoredResume String?           @db.Text
+  notes          String?           @db.Text
+  appliedAt      DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
 
-  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  jobListing JobListing @relation(fields: [jobListingId], references: [id], onDelete: Cascade)
-  resume     Resume?    @relation(fields: [resumeId], references: [id])
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job    Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  resume Resume? @relation(fields: [resumeId], references: [id])
 
-  @@map("job_applications")
+  @@map("applications")
+}
+
+model ScrapingLog {
+  id        String         @id @default(cuid())
+  userId    String
+  source    JobSource
+  query     String
+  location  String?
+  status    ScrapingStatus @default(STARTED)
+  jobsFound Int            @default(0)
+  error     String?        @db.Text
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("scraping_logs")
 }

@@ -2,7 +2,7 @@
 // Shared Types & Interfaces
 // ─────────────────────────────────────────────────────────────
 
-import { JobStatus, ApplicationSource, UserRole } from './enums';
+import { ApplicationStatus, JobSource, UserRole, ScrapingStatus } from './enums';
 
 // ── Generic API response wrapper ─────────────────────────────
 export interface ApiResponse<T = unknown> {
@@ -30,27 +30,29 @@ export interface User {
   updatedAt: string;
 }
 
-// ── Job Listing ───────────────────────────────────────────────
-export interface JobListing {
+// ── Job ───────────────────────────────────────────────────────
+export interface Job {
   id: string;
   title: string;
   company: string;
   location: string;
   description: string;
   url: string;
-  source: ApplicationSource;
+  source: JobSource;
   salary?: string;
   postedAt?: string;
   createdAt: string;
+  updatedAt: string;
 }
 
-// ── Job Application ───────────────────────────────────────────
-export interface JobApplication {
+// ── Application ───────────────────────────────────────────────
+export interface Application {
   id: string;
   userId: string;
-  jobListingId: string;
-  jobListing?: JobListing;
-  status: JobStatus;
+  jobId: string;
+  resumeId?: string;
+  job?: Job;
+  status: ApplicationStatus;
   coverLetter?: string;
   tailoredResume?: string;
   notes?: string;
@@ -66,6 +68,20 @@ export interface Resume {
   name: string;
   content: string;
   isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ── ScrapingLog ───────────────────────────────────────────────
+export interface ScrapingLog {
+  id: string;
+  userId: string;
+  source: JobSource;
+  query: string;
+  location?: string;
+  status: ScrapingStatus;
+  jobsFound: number;
+  error?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -89,5 +105,5 @@ export interface ScrapeJobsPayload {
   userId: string;
   query: string;
   location?: string;
-  sources: ApplicationSource[];
+  sources: JobSource[];
 }

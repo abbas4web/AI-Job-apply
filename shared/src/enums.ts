@@ -2,7 +2,7 @@
 // Shared Enums
 // ─────────────────────────────────────────────────────────────
 
-export enum JobStatus {
+export enum ApplicationStatus {
   PENDING = 'PENDING',
   APPLYING = 'APPLYING',
   APPLIED = 'APPLIED',
@@ -12,13 +12,19 @@ export enum JobStatus {
   WITHDRAWN = 'WITHDRAWN',
 }
 
-export enum ApplicationSource {
+export enum JobSource {
   LINKEDIN = 'LINKEDIN',
   INDEED = 'INDEED',
   GLASSDOOR = 'GLASSDOOR',
   COMPANY_SITE = 'COMPANY_SITE',
   REFERRAL = 'REFERRAL',
   OTHER = 'OTHER',
+}
+
+export enum ScrapingStatus {
+  STARTED = 'STARTED',
+  SUCCESS = 'SUCCESS',
+  FAILED = 'FAILED',
 }
 
 export enum QueueJobType {
