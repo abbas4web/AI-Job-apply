@@ -1,21 +1,18 @@
-import express, { Application, Request, Response, NextResponse } from 'express';
+import express, { Application, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import { env } from './config/env';
 import { API_PREFIX } from '@ai-job-apply/shared';
-
-// Route imports (add as features are implemented)
-// import authRoutes from './routes/auth';
-// import jobRoutes from './routes/jobs';
-// import applicationRoutes from './routes/applications';
-// import resumeRoutes from './routes/resumes';
+import { AppError } from './utils/AppError';
+import { logger } from './utils/logger';
+import apiRouter from './routes';
 
 export function createApp(): Application {
   const app = express();
 
-  // ── Security middleware ─────────────────────────────────────
+  // ── Security ────────────────────────────────────────────────
   app.use(helmet());
   app.use(
     cors({
@@ -31,6 +28,7 @@ export function createApp(): Application {
       max: 100,
       standardHeaders: true,
       legacyHeaders: false,
+      message: { success: false, error: 'Too many requests, slow down.' },
     })
   );
 
@@ -38,30 +36,32 @@ export function createApp(): Application {
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true }));
 
-  // ── Logging ─────────────────────────────────────────────────
+  // ── HTTP logging ────────────────────────────────────────────
   if (env.NODE_ENV !== 'test') {
     app.use(morgan(env.NODE_ENV === 'development' ? 'dev' : 'combined'));
   }
 
-  // ── Health check ────────────────────────────────────────────
-  app.get('/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
-  });
-
-  // ── API Routes ──────────────────────────────────────────────
-  // app.use(`${API_PREFIX}/auth`, authRoutes);
-  // app.use(`${API_PREFIX}/jobs`, jobRoutes);
-  // app.use(`${API_PREFIX}/applications`, applicationRoutes);
-  // app.use(`${API_PREFIX}/resumes`, resumeRoutes);
+  // ── API routes (/api/v1/...) ────────────────────────────────
+  app.use(API_PREFIX, apiRouter);
 
   // ── 404 handler ─────────────────────────────────────────────
-  app.use((_req: Request, res: Response) => {
-    res.status(404).json({ success: false, error: 'Route not found' });
+  app.use((_req: Request, _res: Response, next: NextFunction) => {
+    next(AppError.notFound('Route not found'));
   });
 
   // ── Global error handler ────────────────────────────────────
-  app.use((err: Error, _req: Request, res: Response, _next: NextResponse) => {
-    console.error(err.stack);
+  // Must have exactly 4 params so Express recognises it as error middleware.
+  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof AppError) {
+      res.status(err.statusCode).json({
+        success: false,
+        error: err.message,
+      });
+      return;
+    }
+
+    // Unexpected error — log it, hide details in production
+    logger.error('Unhandled error:', err);
     res.status(500).json({
       success: false,
       error:
