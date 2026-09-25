@@ -2,7 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import { ZodSchema, ZodError } from 'zod';
 
 /**
- * Middleware factory that validates req.body against a Zod schema.
+ * validate — middleware factory that validates req.body against a Zod schema.
+ * Replaces req.body with the parsed (and coerced) output on success.
  */
 export function validate(schema: ZodSchema) {
   return (req: Request, res: Response, next: NextFunction): void => {
