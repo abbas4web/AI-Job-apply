@@ -3,11 +3,13 @@ import { asyncHandler } from '../utils';
 import {
   getResumes,
   getResumeById,
-  createResume,
+  uploadResume,
   updateResume,
   deleteResume,
 } from '../controllers/resumes.controller';
 import { authenticate } from '../middleware/auth';
+import { validate } from '../middleware/validate';
+import { updateResumeSchema } from '../middleware/schemas/resume.schemas';
 
 const router = Router();
 
@@ -20,11 +22,12 @@ router.get('/', asyncHandler(getResumes));
 // GET    /api/v1/resumes/:id
 router.get('/:id', asyncHandler(getResumeById));
 
-// POST   /api/v1/resumes
-router.post('/', asyncHandler(createResume));
+// POST   /api/v1/resumes  — multipart/form-data, field: "resume" (PDF)
+// Note: multer runs inside the controller so we do NOT use express.json() here
+router.post('/', asyncHandler(uploadResume));
 
-// PATCH  /api/v1/resumes/:id
-router.patch('/:id', asyncHandler(updateResume));
+// PATCH  /api/v1/resumes/:id  — JSON body
+router.patch('/:id', validate(updateResumeSchema), asyncHandler(updateResume));
 
 // DELETE /api/v1/resumes/:id
 router.delete('/:id', asyncHandler(deleteResume));
