@@ -16,7 +16,7 @@ const envSchema = z.object({
   JWT_EXPIRES_IN: z.string().default('7d'),
 
   GEMINI_API_KEY: z.string(),
-  GEMINI_MODEL: z.string().default('gemini-1.5-flash'),
+  GEMINI_MODEL: z.string().default('gemini-3.1-flash-lite'),
 
   CORS_ORIGIN: z.string().default('http://localhost:3000'),
 });

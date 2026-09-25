@@ -3,6 +3,8 @@ const pdfParse = require('pdf-parse') as (buffer: Buffer) => Promise<{ text: str
 import { prisma } from '../config/database';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
+import { geminiService } from './gemini.service';
+import type { ResumeAnalysis } from './schemas/resumeAnalysis.schema';
 
 export interface CreateResumeDto {
   name: string;
@@ -133,6 +135,18 @@ export class ResumesService {
     }
 
     logger.info(`Resume deleted: ${id} for user ${userId}`);
+  }
+
+  // ── AI Analysis ───────────────────────────────────────────
+  async analyze(id: string, userId: string): Promise<ResumeAnalysis> {
+    const resume = await this.findById(id, userId);
+
+    if (!resume.content?.trim()) {
+      throw AppError.badRequest('Resume has no extracted text to analyze');
+    }
+
+    logger.info(`Analyzing resume ${id} for user ${userId}`);
+    return geminiService.analyzeResume(resume.content);
   }
 
   // ── Helpers ───────────────────────────────────────────────
