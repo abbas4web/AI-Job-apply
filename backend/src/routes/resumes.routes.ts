@@ -6,6 +6,8 @@ import {
   uploadResume,
   updateResume,
   deleteResume,
+  analyzeResume,
+  getResumeAnalysis,
 } from '../controllers/resumes.controller';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
@@ -23,7 +25,6 @@ router.get('/', asyncHandler(getResumes));
 router.get('/:id', asyncHandler(getResumeById));
 
 // POST   /api/v1/resumes  — multipart/form-data, field: "resume" (PDF)
-// Note: multer runs inside the controller so we do NOT use express.json() here
 router.post('/', asyncHandler(uploadResume));
 
 // PATCH  /api/v1/resumes/:id  — JSON body
@@ -31,5 +32,13 @@ router.patch('/:id', validate(updateResumeSchema), asyncHandler(updateResume));
 
 // DELETE /api/v1/resumes/:id
 router.delete('/:id', asyncHandler(deleteResume));
+
+// POST   /api/v1/resumes/:id/analyze
+// Runs Gemini analysis, validates response, persists profile, returns result
+router.post('/:id/analyze', asyncHandler(analyzeResume));
+
+// GET    /api/v1/resumes/:id/analyze
+// Returns the last stored analysis without re-running Gemini
+router.get('/:id/analyze', asyncHandler(getResumeAnalysis));
 
 export default router;

@@ -71,3 +71,27 @@ export async function deleteResume(req: Request, res: Response): Promise<void> {
 
   res.status(200).json({ success: true, message: 'Resume deleted' });
 }
+
+// POST /api/v1/resumes/:id/analyze
+// 1. Verifies ownership  2. Fetches resume text from DB
+// 3. Sends to Gemini     4. Validates AI response (Zod)
+// 5. Persists profile    6. Returns structured result
+export async function analyzeResume(req: Request, res: Response): Promise<void> {
+  const { userId } = req as AuthRequest;
+  const { id } = req.params;
+
+  const result = await resumesService.analyze(id, userId);
+
+  res.status(200).json({ success: true, data: result });
+}
+
+// GET /api/v1/resumes/:id/analyze
+// Returns the last stored analysis without re-running Gemini
+export async function getResumeAnalysis(req: Request, res: Response): Promise<void> {
+  const { userId } = req as AuthRequest;
+  const { id } = req.params;
+
+  const profile = await resumesService.getAnalysis(id, userId);
+
+  res.status(200).json({ success: true, data: profile });
+}

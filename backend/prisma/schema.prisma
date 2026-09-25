@@ -71,10 +71,30 @@ model Resume {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   applications Application[]
+  profile      ResumeProfile?
 
   @@map("resumes")
+}
+
+// Stores the structured AI analysis result for a resume (1-to-1)
+model ResumeProfile {
+  id                String   @id @default(cuid())
+  resumeId          String   @unique
+  summary           String   @db.Text
+  skills            String[] // PostgreSQL array
+  yearsOfExperience Float
+  jobTitles         String[]
+  technologies      String[]
+  // Education is stored as JSON (array of objects)
+  education         Json
+  analyzedAt        DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  resume Resume @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+
+  @@map("resume_profiles")
 }
 
 model Job {

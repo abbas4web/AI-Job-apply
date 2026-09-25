@@ -4,7 +4,6 @@ import { prisma } from '../config/database';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
 import { geminiService } from './gemini.service';
-import type { ResumeAnalysis } from './schemas/resumeAnalysis.schema';
 
 export interface CreateResumeDto {
   name: string;
@@ -137,8 +136,9 @@ export class ResumesService {
     logger.info(`Resume deleted: ${id} for user ${userId}`);
   }
 
-  // ── AI Analysis ───────────────────────────────────────────
-  async analyze(id: string, userId: string): Promise<ResumeAnalysis> {
+  // ── AI Analysis + persist ────────────────────────────────
+  async analyze(id: string, userId: string) {
+    // 1. Verify ownership and fetch resume text
     const resume = await this.findById(id, userId);
 
     if (!resume.content?.trim()) {
@@ -146,7 +146,60 @@ export class ResumesService {
     }
 
     logger.info(`Analyzing resume ${id} for user ${userId}`);
-    return geminiService.analyzeResume(resume.content);
+
+    // 2. Send to Gemini — throws AppError(502) on failure after retries
+    const analysis = await geminiService.analyzeResume(resume.content);
+
+    // 3. Persist the structured result (upsert so re-analysis overwrites)
+    const profile = await prisma.resumeProfile.upsert({
+      where: { resumeId: id },
+      create: {
+        resumeId: id,
+        summary: analysis.summary,
+        skills: analysis.skills,
+        yearsOfExperience: analysis.yearsOfExperience,
+        jobTitles: analysis.jobTitles,
+        technologies: analysis.technologies,
+        education: analysis.education,
+      },
+      update: {
+        summary: analysis.summary,
+        skills: analysis.skills,
+        yearsOfExperience: analysis.yearsOfExperience,
+        jobTitles: analysis.jobTitles,
+        technologies: analysis.technologies,
+        education: analysis.education,
+        analyzedAt: new Date(),
+      },
+    });
+
+    logger.info(`Resume profile saved: ${profile.id} for resume ${id}`);
+
+    // 4. Return analysis merged with persistence metadata
+    return {
+      ...analysis,
+      resumeId: id,
+      profileId: profile.id,
+      analyzedAt: profile.analyzedAt,
+    };
+  }
+
+  // ── Get stored analysis ───────────────────────────────────
+  async getAnalysis(id: string, userId: string) {
+    // Verify ownership first
+    await this.assertOwnership(id, userId);
+
+    const profile = await prisma.resumeProfile.findUnique({
+      where: { resumeId: id },
+    });
+
+    if (!profile) {
+      throw AppError.notFound(
+        'No analysis found for this resume. Run POST /resumes/:id/analyze first.'
+      );
+    }
+
+    return profile;
   }
 
   // ── Helpers ───────────────────────────────────────────────
