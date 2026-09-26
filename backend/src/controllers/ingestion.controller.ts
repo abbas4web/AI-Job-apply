@@ -3,6 +3,7 @@ import { ingestionService } from '../ingestion/IngestionService';
 import { getRegisteredSources } from '../ingestion/registry';
 import type { AuthRequest } from '../middleware/auth';
 import type { RunIngestionInput } from '../ingestion/ingestion.schemas';
+import { sseService } from '../sse/SseService';
 
 // POST /api/v1/ingestion/run
 export async function runIngestion(req: Request, res: Response): Promise<void> {
@@ -28,6 +29,14 @@ export async function runIngestion(req: Request, res: Response): Promise<void> {
     },
     { fetched: 0, created: 0, skipped: 0, failed: 0 },
   );
+
+  // SSE: notify the user for each newly created job
+  if (totals.created > 0) {
+    sseService.emit(userId, 'job.found', {
+      count: totals.created,
+      sources: results.filter((r) => r.created > 0).map((r) => r.source),
+    });
+  }
 
   res.status(200).json({
     success: true,

@@ -8,6 +8,7 @@ import type {
 } from '@ai-job-apply/shared';
 import { emailService } from '../../services/email.service';
 import { AppError } from '../../utils/AppError';
+import { sseService } from '../../sse/SseService';
 
 // ─────────────────────────────────────────────────────────────
 // Handlers
@@ -70,14 +71,30 @@ async function handleSendApplicationEmail(
       `applicationId=${applicationId} logId=${result.emailLogId} ` +
       `msgId=${result.providerMsgId}`,
     );
+
+    // SSE: notify the user that the email was sent
+    sseService.emit(userId, 'email.sent', {
+      applicationId,
+      recipientEmail,
+      jobTitle,
+      company,
+    });
   } catch (err) {
     if (err instanceof AppError && err.statusCode < 500) {
       // Bad data or provider not configured — retrying won't help
+      sseService.emit(userId, 'email.failed', {
+        applicationId,
+        message: err.message,
+      });
       throw new UnrecoverableError(
         `SEND_APPLICATION_EMAIL unrecoverable (${err.statusCode}): ${err.message}`,
       );
     }
     // SMTP / network failures → re-throw for BullMQ back-off retry
+    sseService.emit(userId, 'email.failed', {
+      applicationId,
+      message: err instanceof Error ? err.message : String(err),
+    });
     throw err;
   }
 }

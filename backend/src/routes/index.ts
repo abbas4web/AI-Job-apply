@@ -8,6 +8,7 @@ import aiRoutes          from './ai.routes';
 import ingestionRoutes   from './ingestion.routes';
 import settingsRoutes    from './settings.routes';
 import dashboardRoutes   from './dashboard.routes';
+import eventsRoutes      from '../sse/events.routes';
 
 const router = Router();
 
@@ -20,5 +21,6 @@ router.use('/ai',           aiRoutes);
 router.use('/ingestion',    ingestionRoutes);
 router.use('/settings',     settingsRoutes);
 router.use('/dashboard',    dashboardRoutes);
+router.use('/events',       eventsRoutes);
 
 export default router;

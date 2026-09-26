@@ -6,6 +6,7 @@ import type { MatchJobPayload } from '@ai-job-apply/shared';
 import { aiService } from '../../services/ai.service';
 import { matchResultsService } from '../../services/matchResults.service';
 import { AppError } from '../../utils/AppError';
+import { sseService } from '../../sse/SseService';
 
 // ─────────────────────────────────────────────────────────────
 // Handler
@@ -82,6 +83,20 @@ async function handleMatchJob(job: Job<MatchJobPayload>): Promise<void> {
       `[ai-matching] MATCH_JOB done — userId=${userId} jobId=${jobId} ` +
       `resumeId=${resolvedResumeId} score=${match.matchScore}`,
     );
+
+    // ── SSE: notify the user ──────────────────────────────────
+    sseService.emit(userId, 'job.matched', {
+      jobId,
+      resumeId: resolvedResumeId,
+      matchScore: match.matchScore,
+    });
+    sseService.emit(userId, 'ai.matching.completed', {
+      jobId,
+      resumeId: resolvedResumeId,
+      matchScore: match.matchScore,
+      matchedSkills: match.matchedSkills,
+      missingSkills: match.missingSkills,
+    });
   } catch (err) {
     if (err instanceof AppError && err.statusCode < 500) {
       // Bad payload / missing data — retrying will not help
@@ -96,6 +111,11 @@ async function handleMatchJob(job: Job<MatchJobPayload>): Promise<void> {
     }
 
     // 5xx / network — re-throw for BullMQ retry with backoff
+    // Emit automation error SSE so the user sees it in real time
+    sseService.emit(userId, 'automation.error', {
+      jobId,
+      message: err instanceof Error ? err.message : String(err),
+    });
     throw err;
   }
 }
@@ -175,6 +195,13 @@ export function createAiMatchingWorker(): Worker {
               String(dbErr),
             );
           });
+
+        // SSE: notify the user that matching failed
+        sseService.emit(userId, 'ai.matching.failed', {
+          jobId,
+          resumeId,
+          message: err.message,
+        });
       }
     }
   });

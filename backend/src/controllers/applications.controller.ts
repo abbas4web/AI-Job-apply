@@ -9,6 +9,7 @@ import type {
   UpdateApplicationInput,
 } from '../middleware/schemas/application.schemas';
 import type { AuthRequest } from '../middleware/auth';
+import { sseService } from '../sse/SseService';
 
 // GET /api/v1/applications
 export async function getApplications(req: Request, res: Response): Promise<void> {
@@ -41,6 +42,12 @@ export async function createApplication(req: Request, res: Response): Promise<vo
   const body = req.body as CreateApplicationInput;
 
   const application = await applicationsService.create(userId, body);
+
+  // SSE: real-time notification
+  sseService.emit(userId, 'application.created', {
+    applicationId: application.id,
+    jobId: body.jobId,
+  });
 
   res.status(201).json({ success: true, data: application });
 }

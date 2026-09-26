@@ -19,16 +19,23 @@ export function authenticate(
   res: Response,
   next: NextFunction
 ): void {
-  const authHeader = req.headers.authorization;
+  // Support both Authorization header (standard) and ?token= query param
+  // (needed for EventSource which cannot set custom headers)
+  let token: string | undefined;
 
-  if (!authHeader?.startsWith('Bearer ')) {
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith('Bearer ')) {
+    token = authHeader.slice(7);
+  } else if (typeof req.query.token === 'string' && req.query.token) {
+    token = req.query.token;
+  }
+
+  if (!token) {
     res
       .status(401)
       .json({ success: false, error: 'Missing or malformed Authorization header' });
     return;
   }
-
-  const token = authHeader.slice(7);
 
   try {
     const payload = jwt.verify(token, env.JWT_SECRET) as TokenPayload;
