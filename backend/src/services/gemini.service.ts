@@ -5,6 +5,10 @@ import {
   resumeAnalysisSchema,
   type ResumeAnalysis,
 } from './schemas/resumeAnalysis.schema';
+import {
+  jobMatchSchema,
+  type JobMatch,
+} from './schemas/jobMatch.schema';
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -73,6 +77,83 @@ function extractJson(raw: string): string {
   }
 
   return stripped.slice(start, end + 1);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Job-match prompt
+// ─────────────────────────────────────────────────────────────
+
+export interface JobMatchInput {
+  /** Structured profile extracted from the candidate's resume */
+  resumeProfile: {
+    summary:           string;
+    skills:            string[];
+    yearsOfExperience: number;
+    jobTitles:         string[];
+    technologies:      string[];
+    /** candidate's preferred / current location, if known */
+    location?:         string;
+  };
+  jobTitle:       string;
+  company:        string;
+  jobDescription: string;
+  requiredSkills: string[];
+  /** Location string from the job posting (e.g. "Remote", "Berlin, DE") */
+  jobLocation?:   string;
+}
+
+function buildJobMatchPrompt(input: JobMatchInput): string {
+  const {
+    resumeProfile,
+    jobTitle,
+    company,
+    jobDescription,
+    requiredSkills,
+    jobLocation,
+  } = input;
+
+  const profileBlock = JSON.stringify(resumeProfile, null, 2);
+  const skillsList   = requiredSkills.join(', ') || 'not specified';
+  const locationLine = jobLocation ? `Job location: ${jobLocation}` : 'Job location: not specified';
+
+  return `You are a resume-to-job matching engine. Your only job is to produce an objective match assessment.
+
+IMPORTANT RULES:
+- Return ONLY a valid JSON object — no markdown, no code fences, no explanation outside the JSON.
+- Base every field strictly on the data provided. Do not invent or assume information.
+- matchScore is a pure numeric signal (0–100). Do NOT include any recommendation, suggestion, or opinion about whether the candidate should apply. The backend makes that decision.
+- reason must be a factual 2–4 sentence summary of WHY the score is what it is. No advice, no "you should apply", no prescriptive language.
+
+The JSON must conform exactly to this TypeScript type:
+
+{
+  "matchScore":      number,   // integer 0–100: overall fit (skills + experience + role alignment)
+  "matchedSkills":   string[], // job's required skills the candidate demonstrably has
+  "missingSkills":   string[], // job's required skills absent from the candidate's profile
+  "experienceMatch": boolean,  // true if seniority / years of experience broadly fits the role
+  "locationMatch":   boolean,  // true if candidate location is compatible with job location OR job is remote
+  "reason":          string    // 2–4 factual sentences explaining the score — no advice
+}
+
+Scoring guide (use as a rough weight, not a formula):
+  - Skills coverage (matchedSkills / total required skills): ~50 %
+  - Experience level alignment:                              ~30 %
+  - Role / title alignment:                                  ~20 %
+
+---
+CANDIDATE PROFILE:
+${profileBlock}
+
+---
+JOB DETAILS:
+Title: ${jobTitle}
+Company: ${company}
+${locationLine}
+Required skills: ${skillsList}
+
+Job description:
+${jobDescription.slice(0, 4_000)}
+---`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -173,6 +254,87 @@ export class GeminiService {
       'AI analysis failed. Please try again later.',
       502
     );
+  }
+  /**
+   * matchJob — scores how well a candidate's resume profile matches a job.
+   *
+   * Returns a strictly validated JobMatch object.
+   * Retries up to MAX_RETRIES times on parse/validation failures.
+   *
+   * The returned matchScore is a signal only — the caller decides
+   * what threshold warrants an automated action.
+   */
+  async matchJob(input: JobMatchInput): Promise<JobMatch> {
+    const prompt = buildJobMatchPrompt(input);
+    let lastError: Error = new Error('Unknown error');
+
+    for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
+      try {
+        logger.debug(`Gemini matchJob attempt ${attempt}`);
+
+        const model  = getGeminiModel();
+        const result = await model.generateContent({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature:      0.1,   // low temp → deterministic structured output
+            topP:             0.8,
+            maxOutputTokens:  512,   // match response is compact
+          },
+        });
+
+        const rawText = result.response.text();
+
+        if (!rawText?.trim()) {
+          throw new Error('Gemini returned an empty response');
+        }
+
+        const jsonString = extractJson(rawText);
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(jsonString);
+        } catch {
+          throw new Error(`JSON.parse failed: ${jsonString.slice(0, 200)}`);
+        }
+
+        const validated = jobMatchSchema.safeParse(parsed);
+
+        if (!validated.success) {
+          const fieldErrors = JSON.stringify(validated.error.flatten().fieldErrors);
+          throw new Error(`Schema validation failed: ${fieldErrors}`);
+        }
+
+        logger.info(
+          `Gemini matchJob succeeded — score=${validated.data.matchScore} ` +
+          `matched=${validated.data.matchedSkills.length} ` +
+          `missing=${validated.data.missingSkills.length}`,
+        );
+
+        return validated.data;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        logger.warn(
+          `Gemini matchJob attempt ${attempt}/${MAX_RETRIES + 1} failed: ${lastError.message}`,
+        );
+
+        if (
+          lastError.message.includes('API_KEY_INVALID') ||
+          lastError.message.includes('PERMISSION_DENIED')
+        ) {
+          break;
+        }
+
+        if (attempt <= MAX_RETRIES) {
+          const isOverloaded = lastError.message.includes('503');
+          await new Promise((r) =>
+            setTimeout(r, isOverloaded ? attempt * 3_000 : attempt * 500),
+          );
+        }
+      }
+    }
+
+    logger.error('Gemini matchJob failed after all retries:', lastError.message);
+    throw new AppError('Job matching failed. Please try again later.', 502);
   }
 }
 

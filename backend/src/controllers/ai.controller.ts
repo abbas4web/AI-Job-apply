@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { resumesService } from '../services/resumes.service';
 import { geminiService } from '../services/gemini.service';
+import { aiService } from '../services/ai.service';
 import { AppError } from '../utils/AppError';
 import type { AuthRequest } from '../middleware/auth';
 
@@ -42,4 +43,19 @@ export async function analyzeText(req: Request, res: Response): Promise<void> {
     success: true,
     data: analysis,
   });
+}
+
+// POST /api/v1/ai/match-job
+// Scores how well the user's resume profile fits a specific job.
+// Returns a pure match signal — the backend decides what to do with it.
+export async function matchJob(req: Request, res: Response): Promise<void> {
+  const { userId } = req as AuthRequest;
+  const { resumeId, jobId } = req.body as { resumeId?: string; jobId?: string };
+
+  if (!resumeId?.trim()) throw AppError.badRequest('resumeId is required');
+  if (!jobId?.trim())    throw AppError.badRequest('jobId is required');
+
+  const result = await aiService.matchJob(userId, resumeId, jobId);
+
+  res.status(200).json({ success: true, data: result });
 }

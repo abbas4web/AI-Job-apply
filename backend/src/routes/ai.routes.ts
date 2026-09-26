@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler } from '../utils';
-import { analyzeResume, analyzeText } from '../controllers/ai.controller';
+import { analyzeResume, analyzeText, matchJob } from '../controllers/ai.controller';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { z } from 'zod';
@@ -23,6 +23,21 @@ router.post(
   '/analyze-text',
   validate(z.object({ text: z.string().min(50, 'Text too short to analyze') })),
   asyncHandler(analyzeText)
+);
+
+// POST /api/v1/ai/match-job
+// Scores how well a resume profile matches a job listing.
+// Returns matchScore (0–100) + matched/missing skills + experience/location flags.
+// Does NOT make any application decision — that is the backend's responsibility.
+router.post(
+  '/match-job',
+  validate(
+    z.object({
+      resumeId: z.string().min(1, 'resumeId is required'),
+      jobId:    z.string().min(1, 'jobId is required'),
+    })
+  ),
+  asyncHandler(matchJob)
 );
 
 export default router;
