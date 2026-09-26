@@ -1,5 +1,9 @@
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const pdfParse = require('pdf-parse') as (buffer: Buffer) => Promise<{ text: string; numpages: number }>;
+const { PDFParse } = require('pdf-parse') as {
+  PDFParse: new (opts: { data: Uint8Array; verbosity?: number }) => {
+    getText: () => Promise<{ pages: Array<{ text: string }> }>;
+  };
+};
 import { prisma } from '../config/database';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
@@ -209,8 +213,12 @@ export class ResumesService {
     filename: string
   ): Promise<string> {
     try {
-      const parsed = await pdfParse(buffer);
-      const text = parsed.text?.trim();
+      const parser = new PDFParse({
+        data: new Uint8Array(buffer),
+        verbosity: 0, // suppress pdfjs console noise
+      });
+      const result = await parser.getText();
+      const text = result.pages.map((p) => p.text).join('\n').trim();
 
       if (!text || text.length < 50) {
         throw new AppError(
