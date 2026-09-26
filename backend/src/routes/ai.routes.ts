@@ -1,6 +1,11 @@
 import { Router } from 'express';
 import { asyncHandler } from '../utils';
-import { analyzeResume, analyzeText, matchJob } from '../controllers/ai.controller';
+import {
+  analyzeResume,
+  analyzeText,
+  matchJob,
+  generateCoverLetter,
+} from '../controllers/ai.controller';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { z } from 'zod';
@@ -38,6 +43,22 @@ router.post(
     })
   ),
   asyncHandler(matchJob)
+);
+
+// POST /api/v1/ai/cover-letter
+// Generates a concise, grounded cover letter ({ subject, body }) from a
+// stored resume profile + a specific job.
+// Gemini is explicitly instructed not to invent companies, titles,
+// technologies, achievements, or education not present in the profile.
+router.post(
+  '/cover-letter',
+  validate(
+    z.object({
+      resumeId: z.string().min(1, 'resumeId is required'),
+      jobId:    z.string().min(1, 'jobId is required'),
+    })
+  ),
+  asyncHandler(generateCoverLetter)
 );
 
 export default router;

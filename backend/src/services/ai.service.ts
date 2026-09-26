@@ -1,9 +1,10 @@
 import { prisma } from '../config/database';
-import { geminiService, type JobMatchInput } from './gemini.service';
+import { geminiService, type JobMatchInput, type CoverLetterInput } from './gemini.service';
 import { jobsService } from './jobs.service';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
 import type { JobMatch } from './schemas/jobMatch.schema';
+import type { CoverLetter } from './schemas/coverLetter.schema';
 
 // ── Shared helper ─────────────────────────────────────────────
 
@@ -169,6 +170,75 @@ export class AiService {
     );
 
     return { resumeId: resume.id, match: result };
+  }
+
+  /**
+   * generateCoverLetter — fetches the user's resume profile and a job,
+   * then asks Gemini to write a grounded cover letter.
+   *
+   * @param userId   - Verified owner of the resume (from JWT)
+   * @param resumeId - Resume whose stored AI profile to use as the basis
+   * @param jobId    - The job the letter is being written for
+   *
+   * Returns a { subject, body } object — no fabrication guaranteed by prompt.
+   */
+  async generateCoverLetter(
+    userId:   string,
+    resumeId: string,
+    jobId:    string,
+  ): Promise<CoverLetter> {
+    // ── 1. Fetch and verify the resume profile ────────────────
+    const resume = await prisma.resume.findFirst({
+      where:  { id: resumeId, userId },
+      select: { id: true, name: true, profile: true },
+    });
+
+    if (!resume) {
+      throw AppError.notFound('Resume not found');
+    }
+
+    if (!resume.profile) {
+      throw AppError.badRequest(
+        `Resume "${resume.name}" has not been analysed yet. ` +
+        'Run POST /resumes/:id/analyze first to generate a profile.',
+      );
+    }
+
+    // ── 2. Fetch the job ──────────────────────────────────────
+    const job = await jobsService.findById(jobId);
+
+    // ── 3. Assemble Gemini input ──────────────────────────────
+    // education is stored as Json in Prisma — cast safely.
+    const educationRaw = resume.profile.education as Array<{
+      degree: string; field: string; institution: string; year?: number;
+    }>;
+
+    const input: CoverLetterInput = {
+      resumeProfile: {
+        summary:           resume.profile.summary,
+        skills:            resume.profile.skills,
+        yearsOfExperience: resume.profile.yearsOfExperience,
+        jobTitles:         resume.profile.jobTitles,
+        technologies:      resume.profile.technologies,
+        education:         Array.isArray(educationRaw) ? educationRaw : [],
+      },
+      jobTitle:       job.title,
+      company:        job.company,
+      jobDescription: job.description,
+    };
+
+    logger.info(
+      `[AiService] generateCoverLetter — resume=${resumeId} job=${jobId} user=${userId}`,
+    );
+
+    // ── 4. Call Gemini ────────────────────────────────────────
+    const result = await geminiService.generateCoverLetter(input);
+
+    logger.info(
+      `[AiService] generateCoverLetter complete — resume=${resumeId} job=${jobId}`,
+    );
+
+    return result;
   }
 }
 

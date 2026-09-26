@@ -9,6 +9,10 @@ import {
   jobMatchSchema,
   type JobMatch,
 } from './schemas/jobMatch.schema';
+import {
+  coverLetterSchema,
+  type CoverLetter,
+} from './schemas/coverLetter.schema';
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -153,6 +157,79 @@ Required skills: ${skillsList}
 
 Job description:
 ${jobDescription.slice(0, 4_000)}
+---`;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Cover-letter prompt
+// ─────────────────────────────────────────────────────────────
+
+export interface CoverLetterInput {
+  /** Structured profile extracted from the candidate's analysed resume */
+  resumeProfile: {
+    summary:           string;
+    skills:            string[];
+    yearsOfExperience: number;
+    jobTitles:         string[];
+    technologies:      string[];
+    education: Array<{
+      degree:      string;
+      field:       string;
+      institution: string;
+      year?:       number;
+    }>;
+  };
+  jobTitle:       string;
+  company:        string;
+  jobDescription: string;
+}
+
+function buildCoverLetterPrompt(input: CoverLetterInput): string {
+  const { resumeProfile, jobTitle, company, jobDescription } = input;
+
+  const profileBlock   = JSON.stringify(resumeProfile, null, 2);
+  const highestDegree  = resumeProfile.education[0]
+    ? `${resumeProfile.education[0].degree} in ${resumeProfile.education[0].field} from ${resumeProfile.education[0].institution}`
+    : 'not specified';
+
+  return `You are a professional cover letter writer. Write a concise, tailored cover letter based ONLY on the candidate profile and job details provided below.
+
+STRICT RULES — violations will be rejected:
+1. Return ONLY a valid JSON object. No markdown, no code fences, no text outside the JSON.
+2. Do NOT invent, fabricate, or embellish ANY of the following:
+   - company names or employers not listed in the profile
+   - job titles not listed in the profile
+   - technologies, tools, or frameworks not listed in the profile
+   - achievements, metrics, or outcomes not mentioned in the profile
+   - education institutions or degrees not listed in the profile
+   - years of experience beyond what the profile states
+3. Write in first person, professional tone, plain prose — no bullet points, no markdown, no headers.
+4. The letter must be 3–5 paragraphs. Each paragraph must be grounded in the provided data.
+5. Do NOT include a date, postal address, or salutation line (e.g. "Dear Hiring Manager").
+   Start the body directly with the opening paragraph.
+6. The subject line must follow this exact format:
+   "Application for <Job Title> — <Candidate's most recent job title or field>"
+
+The JSON must conform exactly to this TypeScript type:
+{
+  "subject": string,  // email subject line, ≤ 150 chars
+  "body":    string   // full cover letter, plain prose, 200–3000 chars
+}
+
+---
+CANDIDATE PROFILE:
+${profileBlock}
+
+Highest education: ${highestDegree}
+Years of experience: ${resumeProfile.yearsOfExperience}
+
+---
+JOB DETAILS:
+Title:   ${jobTitle}
+Company: ${company}
+
+Job description (first 3000 chars):
+${jobDescription.slice(0, 3_000)}
 ---`;
 }
 
@@ -335,6 +412,92 @@ export class GeminiService {
 
     logger.error('Gemini matchJob failed after all retries:', lastError.message);
     throw new AppError('Job matching failed. Please try again later.', 502);
+  }
+
+  /**
+   * generateCoverLetter — produces a structured cover letter grounded
+   * strictly in the provided resume profile and job details.
+   *
+   * Returns a validated { subject, body } object.
+   * Retries up to MAX_RETRIES times on parse / validation failures.
+   *
+   * Gemini is explicitly instructed not to invent any facts —
+   * every claim in the letter must come from the profile.
+   */
+  async generateCoverLetter(input: CoverLetterInput): Promise<CoverLetter> {
+    const prompt = buildCoverLetterPrompt(input);
+    let lastError: Error = new Error('Unknown error');
+
+    for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
+      try {
+        logger.debug(`Gemini generateCoverLetter attempt ${attempt}`);
+
+        const model  = getGeminiModel();
+        const result = await model.generateContent({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: {
+            // Slightly higher temperature than matching — cover letters
+            // benefit from natural language variation, but still low
+            // enough to stay factual and structured.
+            temperature:     0.3,
+            topP:            0.85,
+            maxOutputTokens: 1024,
+          },
+        });
+
+        const rawText = result.response.text();
+
+        if (!rawText?.trim()) {
+          throw new Error('Gemini returned an empty response');
+        }
+
+        const jsonString = extractJson(rawText);
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(jsonString);
+        } catch {
+          throw new Error(`JSON.parse failed: ${jsonString.slice(0, 200)}`);
+        }
+
+        const validated = coverLetterSchema.safeParse(parsed);
+
+        if (!validated.success) {
+          const fieldErrors = JSON.stringify(validated.error.flatten().fieldErrors);
+          throw new Error(`Schema validation failed: ${fieldErrors}`);
+        }
+
+        logger.info(
+          `Gemini generateCoverLetter succeeded — ` +
+          `subject="${validated.data.subject.slice(0, 60)}…" ` +
+          `bodyLen=${validated.data.body.length}`,
+        );
+
+        return validated.data;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        logger.warn(
+          `Gemini generateCoverLetter attempt ${attempt}/${MAX_RETRIES + 1} failed: ${lastError.message}`,
+        );
+
+        if (
+          lastError.message.includes('API_KEY_INVALID') ||
+          lastError.message.includes('PERMISSION_DENIED')
+        ) {
+          break;
+        }
+
+        if (attempt <= MAX_RETRIES) {
+          const isOverloaded = lastError.message.includes('503');
+          await new Promise((r) =>
+            setTimeout(r, isOverloaded ? attempt * 3_000 : attempt * 500),
+          );
+        }
+      }
+    }
+
+    logger.error('Gemini generateCoverLetter failed after all retries:', lastError.message);
+    throw new AppError('Cover letter generation failed. Please try again later.', 502);
   }
 }
 

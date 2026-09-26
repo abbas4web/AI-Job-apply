@@ -59,3 +59,18 @@ export async function matchJob(req: Request, res: Response): Promise<void> {
 
   res.status(200).json({ success: true, data: result });
 }
+
+// POST /api/v1/ai/cover-letter
+// Generates a grounded cover letter from the user's stored resume profile
+// and a specific job. Gemini is forbidden from inventing any facts.
+export async function generateCoverLetter(req: Request, res: Response): Promise<void> {
+  const { userId } = req as AuthRequest;
+  const { resumeId, jobId } = req.body as { resumeId?: string; jobId?: string };
+
+  if (!resumeId?.trim()) throw AppError.badRequest('resumeId is required');
+  if (!jobId?.trim())    throw AppError.badRequest('jobId is required');
+
+  const result = await aiService.generateCoverLetter(userId, resumeId, jobId);
+
+  res.status(200).json({ success: true, data: result });
+}
