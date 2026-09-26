@@ -1,8 +1,10 @@
 import { Request, Response } from 'express';
 import { jobsService } from '../services/jobs.service';
+import { aiService } from '../services/ai.service';
 import { AppError } from '../utils/AppError';
 import { getJobsQuerySchema } from '../middleware/schemas/job.schemas';
 import type { CreateJobInput, UpdateJobInput } from '../middleware/schemas/job.schemas';
+import type { AuthRequest } from '../middleware/auth';
 
 // GET /api/v1/jobs
 export async function getJobs(req: Request, res: Response): Promise<void> {
@@ -55,4 +57,16 @@ export async function markDuplicate(req: Request, res: Response): Promise<void> 
 export async function deleteJob(req: Request, res: Response): Promise<void> {
   await jobsService.delete(req.params.id);
   res.status(200).json({ success: true, message: 'Job deleted' });
+}
+
+// POST /api/v1/jobs/:jobId/match
+// Scores the authenticated user's default resume against the job.
+// Returns a pure match signal — no application or email is triggered here.
+export async function matchJob(req: Request, res: Response): Promise<void> {
+  const { userId } = req as AuthRequest;
+  const { jobId } = req.params;
+
+  const result = await aiService.matchJobForUser(userId, jobId);
+
+  res.status(200).json({ success: true, data: result });
 }

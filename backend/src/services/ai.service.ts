@@ -5,6 +5,46 @@ import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
 import type { JobMatch } from './schemas/jobMatch.schema';
 
+// ── Shared helper ─────────────────────────────────────────────
+
+/**
+ * Assembles a JobMatchInput from a resume profile + job record.
+ * Extracted so both matchJob() and matchJobForUser() share the same
+ * mapping logic without duplication.
+ */
+function buildMatchInput(
+  profile: {
+    summary:           string;
+    skills:            string[];
+    yearsOfExperience: number;
+    jobTitles:         string[];
+    technologies:      string[];
+  },
+  job: {
+    title:       string;
+    company:     string;
+    description: string;
+    skills:      string[];
+    location:    string;
+  },
+): JobMatchInput {
+  return {
+    resumeProfile: {
+      summary:           profile.summary,
+      skills:            profile.skills,
+      yearsOfExperience: profile.yearsOfExperience,
+      jobTitles:         profile.jobTitles,
+      technologies:      profile.technologies,
+      // ResumeProfile has no location field — leave undefined
+    },
+    jobTitle:       job.title,
+    company:        job.company,
+    jobDescription: job.description,
+    requiredSkills: job.skills,
+    jobLocation:    job.location,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────
 // AiService — high-level AI tasks.
 //
@@ -53,21 +93,7 @@ export class AiService {
     const job = await jobsService.findById(jobId);
 
     // ── 3. Assemble Gemini input ──────────────────────────────
-    const input: JobMatchInput = {
-      resumeProfile: {
-        summary:           profile.summary,
-        skills:            profile.skills,
-        yearsOfExperience: profile.yearsOfExperience,
-        jobTitles:         profile.jobTitles,
-        technologies:      profile.technologies,
-        // ResumeProfile has no location field — leave undefined
-      },
-      jobTitle:       job.title,
-      company:        job.company,
-      jobDescription: job.description,
-      requiredSkills: job.skills,
-      jobLocation:    job.location,
-    };
+    const input = buildMatchInput(profile, job);
 
     logger.info(
       `[AiService] matchJob — resume=${resumeId} job=${jobId} user=${userId}`,
@@ -79,6 +105,57 @@ export class AiService {
     logger.info(
       `[AiService] matchJob complete — score=${result.matchScore} ` +
       `resume=${resumeId} job=${jobId}`,
+    );
+
+    return result;
+  }
+
+  /**
+   * matchJobForUser — resolves the user's default (or most-recent) resume
+   * automatically, then scores it against the given job.
+   *
+   * Used by POST /api/v1/jobs/:jobId/match so the caller only needs to
+   * supply a jobId — no resumeId in the request body.
+   *
+   * Returns a pure JobMatch signal. No emails, no applications.
+   */
+  async matchJobForUser(userId: string, jobId: string): Promise<JobMatch> {
+    // ── 1. Resolve the user's best resume (default first, else most recent) ──
+    const resume = await prisma.resume.findFirst({
+      where: { userId },
+      select: { id: true, name: true, isDefault: true, profile: true },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    if (!resume) {
+      throw AppError.notFound(
+        'No resume found. Upload a resume first.',
+      );
+    }
+
+    if (!resume.profile) {
+      throw AppError.badRequest(
+        `Resume "${resume.name}" has not been analysed yet. ` +
+        'Run POST /resumes/:id/analyze first to generate a profile.',
+      );
+    }
+
+    // ── 2. Fetch the job ──────────────────────────────────────
+    const job = await jobsService.findById(jobId);
+
+    // ── 3. Assemble Gemini input ──────────────────────────────
+    const input = buildMatchInput(resume.profile, job);
+
+    logger.info(
+      `[AiService] matchJobForUser — resume=${resume.id} job=${jobId} user=${userId}`,
+    );
+
+    // ── 4. Call Gemini — throws AppError(502) after retries ───
+    const result = await geminiService.matchJob(input);
+
+    logger.info(
+      `[AiService] matchJobForUser complete — score=${result.matchScore} ` +
+      `resume=${resume.id} job=${jobId}`,
     );
 
     return result;

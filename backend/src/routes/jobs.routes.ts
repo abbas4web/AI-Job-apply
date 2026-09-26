@@ -7,6 +7,7 @@ import {
   updateJob,
   markDuplicate,
   deleteJob,
+  matchJob,
 } from '../controllers/jobs.controller';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
@@ -19,6 +20,10 @@ router.use(authenticate);
 
 // GET    /api/v1/jobs          — list with filters & pagination
 router.get('/', asyncHandler(getJobs));
+
+// POST   /api/v1/jobs/:jobId/match — score user's default resume against the job
+// Registered before /:id to prevent Express matching "match" as the :id segment
+router.post('/:jobId/match', asyncHandler(matchJob));
 
 // GET    /api/v1/jobs/:id      — single job
 router.get('/:id', asyncHandler(getJobById));
