@@ -73,6 +73,7 @@ model User {
   scrapingLogs ScrapingLog[]
   matchResults JobMatchResult[]
   emailLogs    EmailLog[]
+  automationSettings UserAutomationSettings?
 
   @@map("users")
 }
@@ -253,4 +254,43 @@ model EmailLog {
   @@index([userId])
   @@index([applicationId])
   @@map("email_logs")
+}
+
+// ── UserAutomationSettings ─────────────────────────────────────
+// One row per user (1-to-1). Created on first GET with safe defaults.
+// autoApplyEnabled is a stored preference only — the backend reads
+// this flag when deciding whether to trigger actions, but no
+// applications are sent automatically yet.
+
+model UserAutomationSettings {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  // ── Match threshold ───────────────────────────────────────
+  /// Minimum Gemini matchScore (0–100) required before considering a job
+  minimumMatchScore  Int      @default(70)
+
+  // ── Job preferences ───────────────────────────────────────
+  /// Job titles the user is interested in (e.g. ["Senior Engineer", "Tech Lead"])
+  preferredJobTitles String[] @default([])
+
+  /// Locations the user will accept (e.g. ["Remote", "Berlin"])
+  preferredLocations String[] @default([])
+
+  /// Skills the job must advertise (AND filter)
+  requiredSkills     String[] @default([])
+
+  /// Companies to skip entirely
+  excludedCompanies  String[] @default([])
+
+  // ── Automation gate ───────────────────────────────────────
+  /// Master switch — when false the backend never triggers automatic sends
+  autoApplyEnabled   Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_automation_settings")
 }
