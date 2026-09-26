@@ -3,13 +3,13 @@
 // ─────────────────────────────────────────────────────────────
 
 export enum ApplicationStatus {
-  PENDING = 'PENDING',
-  APPLYING = 'APPLYING',
-  APPLIED = 'APPLIED',
-  INTERVIEWING = 'INTERVIEWING',
-  OFFERED = 'OFFERED',
-  REJECTED = 'REJECTED',
-  WITHDRAWN = 'WITHDRAWN',
+  SAVED          = 'SAVED',
+  MATCHED        = 'MATCHED',
+  READY_TO_APPLY = 'READY_TO_APPLY',
+  APPLIED        = 'APPLIED',
+  INTERVIEW      = 'INTERVIEW',
+  OFFER          = 'OFFER',
+  REJECTED       = 'REJECTED',
 }
 
 export enum JobSource {

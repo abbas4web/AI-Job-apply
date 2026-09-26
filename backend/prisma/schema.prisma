@@ -20,13 +20,13 @@ enum UserRole {
 }
 
 enum ApplicationStatus {
-  PENDING
-  APPLYING
-  APPLIED
-  INTERVIEWING
-  OFFERED
-  REJECTED
-  WITHDRAWN
+  SAVED           // user bookmarked the job
+  MATCHED         // AI matched, not yet reviewed
+  READY_TO_APPLY  // user decided to apply
+  APPLIED         // application submitted
+  INTERVIEW       // interview scheduled
+  OFFER           // offer received
+  REJECTED        // rejected by employer or withdrawn
 }
 
 enum JobSource {
@@ -131,22 +131,25 @@ model Job {
 }
 
 model Application {
-  id             String            @id @default(cuid())
-  userId         String
-  jobId          String
-  resumeId       String?
-  status         ApplicationStatus @default(PENDING)
-  coverLetter    String?           @db.Text
-  tailoredResume String?           @db.Text
-  notes          String?           @db.Text
-  appliedAt      DateTime?
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+  id          String            @id @default(cuid())
+  userId      String
+  jobId       String
+  resumeId    String?
+  status      ApplicationStatus @default(SAVED)
+  matchScore  Int?              // 0–100 from Gemini; null if not yet matched
+  notes       String?           @db.Text
+  appliedAt   DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
 
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  job    Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  user   User    @relation(fields: [userId],   references: [id], onDelete: Cascade)
+  job    Job     @relation(fields: [jobId],     references: [id], onDelete: Cascade)
   resume Resume? @relation(fields: [resumeId], references: [id])
 
+  // One application per user per job
+  @@unique([userId, jobId])
+  @@index([userId])
+  @@index([jobId])
   @@map("applications")
 }
 
