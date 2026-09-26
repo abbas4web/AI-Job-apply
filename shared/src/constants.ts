@@ -9,9 +9,12 @@ export const DEFAULT_PAGE_SIZE = 20;
 export const MAX_PAGE_SIZE = 100;
 
 export const QUEUE_NAMES = {
-  AI_TASKS: 'ai-tasks',
-  SCRAPING: 'scraping',
-  APPLICATIONS: 'applications',
+  AI_TASKS:        'ai-tasks',
+  SCRAPING:        'scraping',
+  APPLICATIONS:    'applications',
+  JOB_PROCESSING:  'job-processing',
+  AI_MATCHING:     'ai-matching',
+  EMAIL_PROCESSING: 'email-processing',
 } as const;
 
 export const CACHE_TTL = {

@@ -107,3 +107,47 @@ export interface ScrapeJobsPayload {
   location?: string;
   sources: JobSource[];
 }
+
+// ── job-processing queue payloads ─────────────────────────────
+
+export interface ProcessJobPayload {
+  jobId:    string;
+  source:   JobSource;
+  /** Raw job data from a scrape — normalised and persisted by the worker */
+  rawData?: Record<string, unknown>;
+}
+
+export interface DeduplicateJobPayload {
+  jobId:      string;
+  externalId: string;
+  source:     JobSource;
+}
+
+// ── ai-matching queue payloads ────────────────────────────────
+
+export interface MatchJobPayload {
+  userId:   string;
+  jobId:    string;
+  /**
+   * Optional — if omitted the worker resolves the user's default resume.
+   * Pass explicitly when a specific resume should be used.
+   */
+  resumeId?: string;
+}
+
+// ── email-processing queue payloads ──────────────────────────
+
+export interface SendApplicationEmailPayload {
+  userId:        string;
+  applicationId: string;
+  recipientEmail: string;
+  jobTitle:      string;
+  company:       string;
+}
+
+export interface SendMatchDigestPayload {
+  userId:  string;
+  jobIds:  string[];
+  /** ISO date string — the window this digest covers */
+  periodEnd: string;
+}

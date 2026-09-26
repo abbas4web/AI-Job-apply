@@ -28,11 +28,23 @@ export enum ScrapingStatus {
 }
 
 export enum QueueJobType {
-  SCRAPE_JOBS = 'SCRAPE_JOBS',
-  GENERATE_COVER_LETTER = 'GENERATE_COVER_LETTER',
-  TAILOR_RESUME = 'TAILOR_RESUME',
-  SUBMIT_APPLICATION = 'SUBMIT_APPLICATION',
-  SEND_FOLLOW_UP = 'SEND_FOLLOW_UP',
+  // Legacy / existing
+  SCRAPE_JOBS            = 'SCRAPE_JOBS',
+  GENERATE_COVER_LETTER  = 'GENERATE_COVER_LETTER',
+  TAILOR_RESUME          = 'TAILOR_RESUME',
+  SUBMIT_APPLICATION     = 'SUBMIT_APPLICATION',
+  SEND_FOLLOW_UP         = 'SEND_FOLLOW_UP',
+
+  // job-processing queue
+  PROCESS_JOB            = 'PROCESS_JOB',
+  DEDUPLICATE_JOB        = 'DEDUPLICATE_JOB',
+
+  // ai-matching queue
+  MATCH_JOB              = 'MATCH_JOB',
+
+  // email-processing queue
+  SEND_APPLICATION_EMAIL = 'SEND_APPLICATION_EMAIL',
+  SEND_MATCH_DIGEST      = 'SEND_MATCH_DIGEST',
 }
 
 export enum UserRole {
