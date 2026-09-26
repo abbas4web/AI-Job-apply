@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
+import { enqueueMatchJob } from '../queues/producers/aiMatchingProducer';
 import type { CreateJobInput, UpdateJobInput, GetJobsQuery } from '../middleware/schemas/job.schemas';
 
 // ── Shared select — used for all list / single responses ──────
@@ -84,6 +85,19 @@ export class JobsService {
     });
 
     logger.info(`Job created: ${job.id} — "${job.title}" at ${job.company}`);
+
+    // ── Fan-out: enqueue a MATCH_JOB for every user who has
+    //    an analysed default resume.
+    //
+    //    Done asynchronously — a failure here must never block
+    //    the HTTP response that created the job.
+    this.enqueueMatchJobsForAllUsers(job.id).catch((err: unknown) => {
+      logger.error(
+        `[jobs] Failed to enqueue match jobs for jobId=${job.id}:`,
+        String(err),
+      );
+    });
+
     return job;
   }
 
@@ -221,6 +235,52 @@ export class JobsService {
     });
     if (!job) throw AppError.notFound('Job not found');
     return job;
+  }
+
+  /**
+   * enqueueMatchJobsForAllUsers — finds every user that has at least
+   * one resume with an analysed profile, then enqueues a MATCH_JOB
+   * for each one against the newly created job.
+   *
+   * Only the default (or most-recent) resume per user is targeted;
+   * the worker resolves the exact resume at execution time so we
+   * don't need to lock in a resumeId here.
+   *
+   * Runs fire-and-forget from create() — failures are logged, not thrown.
+   */
+  private async enqueueMatchJobsForAllUsers(jobId: string): Promise<void> {
+    // Find distinct userIds that have at least one analysed resume
+    const usersWithProfiles = await prisma.resumeProfile.findMany({
+      select: { resume: { select: { userId: true } } },
+      distinct: ['resumeId'],
+    });
+
+    // Deduplicate userIds (a user could have multiple analysed resumes)
+    const userIds = [
+      ...new Set(usersWithProfiles.map((r) => r.resume.userId)),
+    ];
+
+    if (userIds.length === 0) {
+      logger.debug(`[jobs] No users with analysed resumes — skipping match fan-out for jobId=${jobId}`);
+      return;
+    }
+
+    logger.info(
+      `[jobs] Enqueueing MATCH_JOB for ${userIds.length} user(s) — jobId=${jobId}`,
+    );
+
+    // Enqueue in parallel; individual failures are logged but don't
+    // abort the rest of the fan-out.
+    await Promise.allSettled(
+      userIds.map((userId) =>
+        enqueueMatchJob({ userId, jobId }).catch((err: unknown) => {
+          logger.error(
+            `[jobs] enqueueMatchJob failed — userId=${userId} jobId=${jobId}:`,
+            String(err),
+          );
+        }),
+      ),
+    );
   }
 }
 

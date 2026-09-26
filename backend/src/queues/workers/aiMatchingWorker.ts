@@ -4,23 +4,38 @@ import { logger } from '../../utils/logger';
 import { QUEUE_NAMES, QueueJobType } from '@ai-job-apply/shared';
 import type { MatchJobPayload } from '@ai-job-apply/shared';
 import { aiService } from '../../services/ai.service';
+import { matchResultsService } from '../../services/matchResults.service';
 import { AppError } from '../../utils/AppError';
 
 // ─────────────────────────────────────────────────────────────
-// Handlers
+// Handler
 // ─────────────────────────────────────────────────────────────
 
 /**
- * MATCH_JOB — score a candidate's resume profile against a job via Gemini.
+ * handleMatchJob — full pipeline for a single MATCH_JOB:
  *
- * - Uses matchJobForUser (resolves default resume) unless resumeId is supplied.
- * - 4xx AppErrors (bad request / not found) are unrecoverable — the payload
- *   is invalid and retrying will not help.
- * - 5xx / 502 (Gemini failures) are left recoverable so BullMQ retries
- *   with exponential back-off.
+ *   1. Flip DB row → PROCESSING  (idempotent upsert)
+ *   2. Call Gemini via aiService  (retries handled by BullMQ backoff)
+ *   3. Persist result             (idempotent upsert → COMPLETED)
+ *
+ * Retry safety:
+ *   - Every DB write uses upsert on unique(userId, jobId, resumeId).
+ *   - A crash between steps 2 and 3 will re-run step 2 on the next
+ *     attempt; Gemini is called again and the result is overwritten —
+ *     no duplicate rows are ever created.
+ *
+ * Unrecoverable errors (4xx / bad payload):
+ *   - DB row is flipped to FAILED immediately.
+ *   - UnrecoverableError tells BullMQ not to retry.
+ *
+ * Recoverable errors (5xx / network):
+ *   - Re-thrown so BullMQ retries with exponential back-off.
+ *   - DB row stays PROCESSING until the final attempt; the `failed`
+ *     event handler (below) flips it to FAILED after exhaustion.
  */
 async function handleMatchJob(job: Job<MatchJobPayload>): Promise<void> {
-  const { userId, jobId, resumeId } = job.data;
+  const { userId, jobId, resumeId: payloadResumeId } = job.data;
+  const queueJobId = job.id ?? `match:${userId}:${jobId}`;
 
   if (!userId || !jobId) {
     throw new UnrecoverableError(
@@ -30,30 +45,57 @@ async function handleMatchJob(job: Job<MatchJobPayload>): Promise<void> {
 
   logger.info(
     `[ai-matching] MATCH_JOB start — userId=${userId} jobId=${jobId} ` +
-    `resumeId=${resumeId ?? 'default'} attempt=${job.attemptsMade + 1}`,
+    `resumeId=${payloadResumeId ?? 'default'} attempt=${job.attemptsMade + 1}`,
   );
 
+  // ── Step 1: mark PROCESSING ───────────────────────────────
+  // resumeId may still be unknown (worker will resolve default resume).
+  // We only update the row if we have the full key; otherwise the
+  // upsert in saveResult / markFailed will create it on first write.
+  if (payloadResumeId) {
+    await matchResultsService.markProcessing(userId, jobId, payloadResumeId);
+  }
+
+  // ── Step 2: call Gemini ───────────────────────────────────
+  let resolvedResumeId: string;
+
   try {
-    const result = resumeId
-      ? await aiService.matchJob(userId, resumeId, jobId)
+    const { resumeId: r, match } = payloadResumeId
+      ? {
+          resumeId: payloadResumeId,
+          match:    await aiService.matchJob(userId, payloadResumeId, jobId),
+        }
       : await aiService.matchJobForUser(userId, jobId);
+
+    resolvedResumeId = r;
+
+    // ── Step 3: persist result (COMPLETED) ───────────────────
+    await matchResultsService.saveResult(
+      userId,
+      jobId,
+      resolvedResumeId,
+      match,
+      queueJobId,
+    );
 
     logger.info(
       `[ai-matching] MATCH_JOB done — userId=${userId} jobId=${jobId} ` +
-      `score=${result.matchScore} matched=${result.matchedSkills.length} ` +
-      `missing=${result.missingSkills.length}`,
+      `resumeId=${resolvedResumeId} score=${match.matchScore}`,
     );
-
-    // TODO: persist result to DB or enqueue follow-up actions here
-    // e.g. await matchResultsService.save({ userId, jobId, ...result });
   } catch (err) {
     if (err instanceof AppError && err.statusCode < 500) {
-      // 4xx — payload or data problem; retrying won't fix it
-      throw new UnrecoverableError(
-        `MATCH_JOB unrecoverable (${err.statusCode}): ${err.message}`,
-      );
+      // Bad payload / missing data — retrying will not help
+      const msg = `MATCH_JOB unrecoverable (${err.statusCode}): ${err.message}`;
+
+      // Persist failure to DB if we have enough key parts
+      if (payloadResumeId) {
+        await matchResultsService.markFailed(userId, jobId, payloadResumeId, msg);
+      }
+
+      throw new UnrecoverableError(msg);
     }
-    // Re-throw 5xx / network errors so BullMQ retries with backoff
+
+    // 5xx / network — re-throw for BullMQ retry with backoff
     throw err;
   }
 }
@@ -84,7 +126,7 @@ export function createAiMatchingWorker(): Worker {
     processAiMatchingJob,
     {
       connection:  createRedisConnection('ai-matching-worker'),
-      // Keep concurrency low — each job makes a Gemini API call
+      // Low concurrency — each job makes a Gemini API call
       concurrency: 2,
     },
   );
@@ -93,7 +135,8 @@ export function createAiMatchingWorker(): Worker {
 
   worker.on('active', (job) => {
     logger.info(
-      `[ai-matching] active — id=${job.id} name=${job.name} attempt=${job.attemptsMade + 1}`,
+      `[ai-matching] active — id=${job.id} name=${job.name} ` +
+      `attempt=${job.attemptsMade + 1}`,
     );
   });
 
@@ -103,15 +146,37 @@ export function createAiMatchingWorker(): Worker {
     );
   });
 
+  /**
+   * failed — fires after ALL retries are exhausted (or on
+   * UnrecoverableError).  Flips the DB row to FAILED so the
+   * outcome is always visible regardless of how the job died.
+   */
   worker.on('failed', (job, err) => {
     const isUnrecoverable = err instanceof UnrecoverableError;
-    const remaining = job ? (job.opts.attempts ?? 1) - job.attemptsMade : 0;
+    const remaining = job
+      ? Math.max(0, (job.opts.attempts ?? 1) - job.attemptsMade - 1)
+      : 0;
 
     logger.error(
       `[ai-matching] failed — id=${job?.id} name=${job?.name} ` +
-      `attempt=${job?.attemptsMade} remaining=${isUnrecoverable ? 0 : remaining} ` +
+      `attempt=${job?.attemptsMade} remaining=${remaining} ` +
       `unrecoverable=${isUnrecoverable} error=${err.message}`,
     );
+
+    // Only flip to FAILED once all retries are exhausted
+    if (remaining === 0 && job?.data) {
+      const { userId, jobId, resumeId } = job.data as MatchJobPayload;
+      if (userId && jobId && resumeId) {
+        matchResultsService
+          .markFailed(userId, jobId, resumeId, err.message)
+          .catch((dbErr: unknown) => {
+            logger.error(
+              `[ai-matching] could not markFailed in DB — id=${job.id}:`,
+              String(dbErr),
+            );
+          });
+      }
+    }
   });
 
   worker.on('error', (err) => {

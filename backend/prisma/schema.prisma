@@ -44,6 +44,13 @@ enum ScrapingStatus {
   FAILED
 }
 
+enum JobMatchStatus {
+  PENDING    // enqueued, not yet processed
+  PROCESSING // worker picked it up
+  COMPLETED  // Gemini returned a result
+  FAILED     // all retries exhausted
+}
+
 // ── Models ────────────────────────────────────────────────────
 
 model User {
@@ -58,6 +65,7 @@ model User {
   resumes      Resume[]
   applications Application[]
   scrapingLogs ScrapingLog[]
+  matchResults JobMatchResult[]
 
   @@map("users")
 }
@@ -74,6 +82,7 @@ model Resume {
   user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   applications Application[]
   profile      ResumeProfile?
+  matchResults JobMatchResult[]
 
   @@map("resumes")
 }
@@ -114,6 +123,7 @@ model Job {
   updatedAt   DateTime  @updatedAt
 
   applications Application[]
+  matchResults JobMatchResult[]
 
   // Prevent duplicate ingestion from the same source
   @@unique([source, externalId])
@@ -155,4 +165,47 @@ model ScrapingLog {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("scraping_logs")
+}
+
+// ── JobMatchResult ─────────────────────────────────────────────
+// Stores the Gemini match assessment for a (user, job, resume) triple.
+//
+// Unique constraint on (userId, jobId, resumeId) means:
+//   - prisma.jobMatchResult.upsert() is safe to call on every retry
+//     without creating duplicate rows.
+//   - Re-running the worker for the same job simply overwrites the
+//     previous result with the latest Gemini output.
+
+model JobMatchResult {
+  id               String         @id @default(cuid())
+  userId           String
+  jobId            String
+  resumeId         String
+
+  // ── Match signal from Gemini ──────────────────────────────
+  status           JobMatchStatus @default(PENDING)
+  matchScore       Int?           // 0–100; null until COMPLETED
+  matchedSkills    String[]
+  missingSkills    String[]
+  experienceMatch  Boolean?
+  locationMatch    Boolean?
+  reason           String?        @db.Text
+
+  // ── Metadata ──────────────────────────────────────────────
+  /// BullMQ job ID — lets us correlate queue jobs with DB rows
+  queueJobId       String?
+  errorMessage     String?        @db.Text
+  processedAt      DateTime?      // set when status → COMPLETED
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  user   User   @relation(fields: [userId],   references: [id], onDelete: Cascade)
+  job    Job    @relation(fields: [jobId],     references: [id], onDelete: Cascade)
+  resume Resume @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+
+  // One result per (user, job, resume) triple — makes upsert idempotent
+  @@unique([userId, jobId, resumeId])
+  @@index([userId])
+  @@index([jobId])
+  @@map("job_match_results")
 }

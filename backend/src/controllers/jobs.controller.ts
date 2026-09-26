@@ -68,5 +68,5 @@ export async function matchJob(req: Request, res: Response): Promise<void> {
 
   const result = await aiService.matchJobForUser(userId, jobId);
 
-  res.status(200).json({ success: true, data: result });
+  res.status(200).json({ success: true, data: result.match });
 }

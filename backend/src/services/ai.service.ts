@@ -46,6 +46,16 @@ function buildMatchInput(
 }
 
 // ─────────────────────────────────────────────────────────────
+// Return types
+// ─────────────────────────────────────────────────────────────
+
+export interface MatchJobForUserResult {
+  /** The resume that was resolved and used for matching */
+  resumeId: string;
+  match:    JobMatch;
+}
+
+// ─────────────────────────────────────────────────────────────
 // AiService — high-level AI tasks.
 //
 // Responsibilities:
@@ -119,7 +129,7 @@ export class AiService {
    *
    * Returns a pure JobMatch signal. No emails, no applications.
    */
-  async matchJobForUser(userId: string, jobId: string): Promise<JobMatch> {
+  async matchJobForUser(userId: string, jobId: string): Promise<MatchJobForUserResult> {
     // ── 1. Resolve the user's best resume (default first, else most recent) ──
     const resume = await prisma.resume.findFirst({
       where: { userId },
@@ -158,7 +168,7 @@ export class AiService {
       `resume=${resume.id} job=${jobId}`,
     );
 
-    return result;
+    return { resumeId: resume.id, match: result };
   }
 }
 
