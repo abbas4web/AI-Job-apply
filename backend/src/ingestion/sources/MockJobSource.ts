@@ -153,14 +153,17 @@ export class MockJobSource extends BaseJobSource {
 
   async fetch(params: IngestionParams): Promise<RawJob[]> {
     const limit    = this.clamp(params.limit ?? 10, 1, MOCK_POOL.length);
-    const query    = params.query.toLowerCase();
-    const location = params.location?.toLowerCase();
+    const query    = params.query.toLowerCase().trim();
+    const location = params.location?.toLowerCase().trim();
 
     let results = MOCK_POOL.filter((job) => {
+      // Empty or very short queries match everything
       const matchesQuery =
         !query ||
+        query.length < 3 ||
         job.title.toLowerCase().includes(query) ||
         job.company.toLowerCase().includes(query) ||
+        job.description.toLowerCase().includes(query) ||
         (job.skills ?? []).some((s) => s.toLowerCase().includes(query));
 
       const matchesLocation =
