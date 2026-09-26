@@ -30,10 +30,10 @@ function buildRedisOptions(opts: RedisOptions = {}) {
 
 // ── Shared instance ───────────────────────────────────────────
 // Used by Queue instances (producers) and the API server.
-// lazyConnect: true so the API can call connectRedis() explicitly
-// after all other bootstrap steps complete.
+// BullMQ connects this client automatically when queues are created —
+// do NOT set lazyConnect here or call connect() manually in server.ts.
 
-export const redis = new Redis(buildRedisOptions({ lazyConnect: true }));
+export const redis = new Redis(buildRedisOptions({ lazyConnect: false }));
 
 redis.on('connect', () => console.log('[Redis] connected'));
 redis.on('error',   (err) => console.error('[Redis] error:', err));

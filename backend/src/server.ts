@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { createApp } from './app';
 import { env } from './config/env';
-import { connectRedis } from './config/redis';
+import { redis } from './config/redis';
 import { prisma } from './config/database';
 import { logger } from './utils/logger';
 
@@ -11,7 +11,15 @@ async function bootstrap() {
   logger.info('Database connected');
 
   // ── Redis ───────────────────────────────────────────────────
-  await connectRedis();
+  // BullMQ Queue instances (imported transitively) already call
+  // connect() on the shared redis client at module load time.
+  // Calling connect() again would throw "already connecting/connected".
+  // Instead, wait for the client to be ready before proceeding.
+  await new Promise<void>((resolve, reject) => {
+    if (redis.status === 'ready') return resolve();
+    redis.once('ready', resolve);
+    redis.once('error', reject);
+  });
   logger.info('Redis connected');
 
   // ── Express ─────────────────────────────────────────────────
