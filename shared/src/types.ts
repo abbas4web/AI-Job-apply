@@ -138,11 +138,15 @@ export interface MatchJobPayload {
 // ── email-processing queue payloads ──────────────────────────
 
 export interface SendApplicationEmailPayload {
-  userId:        string;
-  applicationId: string;
+  userId:         string;
+  applicationId:  string;
   recipientEmail: string;
-  jobTitle:      string;
-  company:       string;
+  jobTitle:       string;
+  company:        string;
+  /** ID of the resume to attach as PDF */
+  resumeId:       string;
+  /** Pre-generated cover letter body — avoids a second Gemini call in the worker */
+  coverLetter:    { subject: string; body: string };
 }
 
 export interface SendMatchDigestPayload {

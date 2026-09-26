@@ -6,26 +6,44 @@ import type {
   SendApplicationEmailPayload,
   SendMatchDigestPayload,
 } from '@ai-job-apply/shared';
+import { emailService } from '../../services/email.service';
+import { AppError } from '../../utils/AppError';
 
 // ─────────────────────────────────────────────────────────────
 // Handlers
 // ─────────────────────────────────────────────────────────────
 
 /**
- * SEND_APPLICATION_EMAIL — transactional confirmation email sent to
- * the candidate after an application is submitted.
+ * SEND_APPLICATION_EMAIL — sends the cover letter + resume attachment
+ * to the recruiter / hiring manager on behalf of the candidate.
  *
- * TODO: integrate with an email provider (e.g. Resend, SendGrid).
+ * Retry safety:
+ *   - EmailService creates a PENDING log row before the send attempt.
+ *     A duplicate send on retry is visible in the log (multiple rows
+ *     for the same applicationId).
+ *   - 4xx AppErrors (missing data, provider not configured) →
+ *     UnrecoverableError so BullMQ does not burn retries.
+ *   - SMTP / network errors → re-thrown, BullMQ retries with back-off.
  */
 async function handleSendApplicationEmail(
   job: Job<SendApplicationEmailPayload>,
 ): Promise<void> {
-  const { userId, applicationId, recipientEmail, jobTitle, company } = job.data;
+  const {
+    userId,
+    applicationId,
+    recipientEmail,
+    jobTitle,
+    company,
+    resumeId,
+    coverLetter,
+  } = job.data;
 
-  if (!userId || !applicationId || !recipientEmail) {
+  if (!userId || !applicationId || !recipientEmail || !resumeId || !coverLetter) {
     throw new UnrecoverableError(
       `SEND_APPLICATION_EMAIL missing required fields: ` +
-      `userId=${userId}, applicationId=${applicationId}, recipientEmail=${recipientEmail}`,
+      `userId=${userId} applicationId=${applicationId} ` +
+      `recipientEmail=${recipientEmail} resumeId=${resumeId} ` +
+      `hasCoverLetter=${!!coverLetter}`,
     );
   }
 
@@ -35,18 +53,38 @@ async function handleSendApplicationEmail(
     `job="${jobTitle}" at "${company}" attempt=${job.attemptsMade + 1}`,
   );
 
-  // TODO: await emailProvider.sendApplicationConfirmation({ recipientEmail, jobTitle, company });
+  try {
+    const result = await emailService.sendApplicationEmail({
+      userId,
+      applicationId,
+      recipientEmail,
+      jobTitle,
+      company,
+      resumeId,
+      coverLetter,
+      queueJobId: job.id ?? undefined,
+    });
 
-  logger.info(
-    `[email-processing] SEND_APPLICATION_EMAIL done — applicationId=${applicationId}`,
-  );
+    logger.info(
+      `[email-processing] SEND_APPLICATION_EMAIL done — ` +
+      `applicationId=${applicationId} logId=${result.emailLogId} ` +
+      `msgId=${result.providerMsgId}`,
+    );
+  } catch (err) {
+    if (err instanceof AppError && err.statusCode < 500) {
+      // Bad data or provider not configured — retrying won't help
+      throw new UnrecoverableError(
+        `SEND_APPLICATION_EMAIL unrecoverable (${err.statusCode}): ${err.message}`,
+      );
+    }
+    // SMTP / network failures → re-throw for BullMQ back-off retry
+    throw err;
+  }
 }
 
 /**
- * SEND_MATCH_DIGEST — periodic email summarising newly matched jobs
- * for the user.  Not triggered automatically yet.
- *
- * TODO: integrate with an email provider.
+ * SEND_MATCH_DIGEST — periodic email summarising newly matched jobs.
+ * Not triggered automatically yet; stub kept for future use.
  */
 async function handleSendMatchDigest(
   job: Job<SendMatchDigestPayload>,
@@ -65,7 +103,8 @@ async function handleSendMatchDigest(
     `attempt=${job.attemptsMade + 1}`,
   );
 
-  // TODO: await emailProvider.sendMatchDigest({ userId, jobIds, periodEnd });
+  // TODO: implement digest email when digest feature is built
+  // await emailService.sendMatchDigest({ userId, jobIds, periodEnd });
 
   logger.info(
     `[email-processing] SEND_MATCH_DIGEST done — userId=${userId}`,
@@ -109,7 +148,8 @@ export function createEmailWorker(): Worker {
 
   worker.on('active', (job) => {
     logger.info(
-      `[email-processing] active — id=${job.id} name=${job.name} attempt=${job.attemptsMade + 1}`,
+      `[email-processing] active — id=${job.id} name=${job.name} ` +
+      `attempt=${job.attemptsMade + 1}`,
     );
   });
 
@@ -121,11 +161,13 @@ export function createEmailWorker(): Worker {
 
   worker.on('failed', (job, err) => {
     const isUnrecoverable = err instanceof UnrecoverableError;
-    const remaining = job ? (job.opts.attempts ?? 1) - job.attemptsMade : 0;
+    const remaining = job
+      ? Math.max(0, (job.opts.attempts ?? 1) - job.attemptsMade - 1)
+      : 0;
 
     logger.error(
       `[email-processing] failed — id=${job?.id} name=${job?.name} ` +
-      `attempt=${job?.attemptsMade} remaining=${isUnrecoverable ? 0 : remaining} ` +
+      `attempt=${job?.attemptsMade} remaining=${remaining} ` +
       `unrecoverable=${isUnrecoverable} error=${err.message}`,
     );
   });

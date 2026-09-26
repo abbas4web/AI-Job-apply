@@ -51,6 +51,12 @@ enum JobMatchStatus {
   FAILED     // all retries exhausted
 }
 
+enum EmailStatus {
+  PENDING   // queued, not yet attempted
+  SENT      // provider accepted the message
+  FAILED    // all retries exhausted
+}
+
 // ── Models ────────────────────────────────────────────────────
 
 model User {
@@ -66,6 +72,7 @@ model User {
   applications Application[]
   scrapingLogs ScrapingLog[]
   matchResults JobMatchResult[]
+  emailLogs    EmailLog[]
 
   @@map("users")
 }
@@ -211,4 +218,39 @@ model JobMatchResult {
   @@index([userId])
   @@index([jobId])
   @@map("job_match_results")
+}
+
+// ── EmailLog ───────────────────────────────────────────────────
+// One record per send attempt.  Multiple rows per application are
+// possible (initial send + retries all create rows).
+// The latest row with status=SENT is the authoritative record.
+
+model EmailLog {
+  id            String      @id @default(cuid())
+  userId        String
+  applicationId String
+
+  status        EmailStatus @default(PENDING)
+
+  // ── Message details ───────────────────────────────────────
+  recipientEmail String
+  subject        String
+  /// Provider message-ID returned on success (e.g. SMTP messageId)
+  providerMsgId  String?
+
+  // ── Failure details ───────────────────────────────────────
+  errorMessage   String?     @db.Text
+
+  // ── Queue correlation ─────────────────────────────────────
+  queueJobId     String?
+
+  sentAt         DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([applicationId])
+  @@map("email_logs")
 }
