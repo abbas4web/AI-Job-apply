@@ -1,6 +1,7 @@
 import { JobSource } from '@prisma/client';
 import { BaseJobSource } from '../BaseJobSource';
-import type { RawJob, IngestionParams } from '../types';
+import { registerSource } from '../registry';
+import type { RawJob, IngestionParams, SourceCapabilities, HealthStatus } from '../types';
 
 // ─────────────────────────────────────────────────────────────
 // MockJobSource — deterministic fake data for development and
@@ -8,10 +9,20 @@ import type { RawJob, IngestionParams } from '../types';
 //
 // Behaviour:
 //   • Returns up to `params.limit` (default 10) jobs
-//   • Filters the pool by query (case-insensitive title/company match)
+//   • Filters the pool by query (case-insensitive title/company/skill match)
 //   • Filters by location when params.location is provided
 //   • externalId is stable so re-running won't create duplicates
 // ─────────────────────────────────────────────────────────────
+
+function daysAgo(n: number): Date {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d;
+}
+
+async function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 const MOCK_POOL: RawJob[] = [
   {
@@ -151,13 +162,32 @@ const MOCK_POOL: RawJob[] = [
 export class MockJobSource extends BaseJobSource {
   readonly source = JobSource.OTHER;
 
+  readonly capabilities: SourceCapabilities = {
+    displayName:      'Mock (Development)',
+    description:      'Deterministic fake jobs for local development and CI. No network calls.',
+    enabled:          true,
+    requiresNetwork:  false,
+    rateLimitMs:      0,
+    maxJobsPerRun:    MOCK_POOL.length,
+    supportsLocation: true,
+    supportsQuery:    true,
+  };
+
+  // validateConfig() — base class default is sufficient (checks enabled flag)
+  // No credentials required for the mock source.
+
+  /** Mock is always healthy — no network to probe */
+  async healthCheck(): Promise<HealthStatus> {
+    return { status: 'ok', latencyMs: 0 };
+  }
+
   async fetch(params: IngestionParams): Promise<RawJob[]> {
-    const limit    = this.clamp(params.limit ?? 10, 1, MOCK_POOL.length);
+    const limit    = this.resolveLimit(params.limit, 10);
     const query    = params.query.toLowerCase().trim();
     const location = params.location?.toLowerCase().trim();
 
     let results = MOCK_POOL.filter((job) => {
-      // Empty or very short queries match everything
+      // Queries shorter than 3 chars match everything (avoid over-filtering typos)
       const matchesQuery =
         !query ||
         query.length < 3 ||
@@ -173,21 +203,14 @@ export class MockJobSource extends BaseJobSource {
       return matchesQuery && matchesLocation;
     });
 
-    // Simulate a short async delay (as a real HTTP call would have)
+    // Simulate the latency of a real HTTP call so timing-related bugs surface in dev
     await delay(50);
 
     return results.slice(0, limit);
   }
 }
 
-// ── Helpers ───────────────────────────────────────────────────
-
-function daysAgo(n: number): Date {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// ── Self-registration ────────────────────────────────────────
+// Importing this file is enough to activate the source.
+// No changes to registry.ts are required.
+registerSource(new MockJobSource());

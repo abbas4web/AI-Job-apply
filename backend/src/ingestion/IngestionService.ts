@@ -1,18 +1,23 @@
+// Load all source self-registrations before any registry lookup
+import './sources/index';
+
 import { JobSource, ScrapingStatus, Prisma } from '@prisma/client';
 import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
-import { getSource } from './registry';
+import { getSource, getEnabledSources } from './registry';
+import { isSourceError } from './errors';
 import type { IngestionParams, IngestionResult, NormalisedJob } from './types';
 
 // ─────────────────────────────────────────────────────────────
-// IngestionService — orchestrates one ingestion run:
+// IngestionService — orchestrates one ingestion run per source:
 //
-//   1. Open a ScrapingLog row (status = STARTED)
-//   2. Delegate fetching to the registered source handler
-//   3. Normalise every RawJob via BaseJobSource.normalizeAll()
-//   4. Upsert each job into the DB (skip duplicates gracefully)
-//   5. Close the ScrapingLog row (status = SUCCESS | FAILED)
-//   6. Return an IngestionResult summary
+//   1. Validate source config (throws → mark FAILED immediately)
+//   2. Open a ScrapingLog row (status = STARTED)
+//   3. Delegate fetching to the registered source handler
+//   4. Normalise every RawJob via source.normalizeAll()
+//   5. Upsert each job into the DB (skip duplicates gracefully)
+//   6. Close the ScrapingLog row (status = SUCCESS | FAILED)
+//   7. Return an IngestionResult summary
 // ─────────────────────────────────────────────────────────────
 
 export class IngestionService {
@@ -28,7 +33,32 @@ export class IngestionService {
     source: JobSource,
     params: IngestionParams,
   ): Promise<IngestionResult> {
-    // ── 1. Open scraping log ────────────────────────────────
+    const sourceHandler = getSource(source);
+    const { displayName } = sourceHandler.capabilities;
+
+    const result: IngestionResult = {
+      source,
+      fetched:  0,
+      created:  0,
+      skipped:  0,
+      failed:   0,
+      errors:   [],
+      logId:    '',
+    };
+
+    // ── 1. Pre-flight: validate config before touching the DB ─
+    try {
+      sourceHandler.validateConfig();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn(
+        `[Ingestion] skipping disabled source — source=${source} reason="${message}"`,
+      );
+      result.errors.push(message);
+      return result;
+    }
+
+    // ── 2. Open scraping log ──────────────────────────────────
     const log = await prisma.scrapingLog.create({
       data: {
         userId,
@@ -39,38 +69,42 @@ export class IngestionService {
       },
     });
 
-    logger.info(`[Ingestion] run started — source=${source} query="${params.query}" logId=${log.id}`);
+    result.logId = log.id;
 
-    const result: IngestionResult = {
-      source,
-      fetched:  0,
-      created:  0,
-      skipped:  0,
-      failed:   0,
-      errors:   [],
-      logId:    log.id,
-    };
+    logger.info(
+      `[Ingestion] run started — source=${source} (${displayName}) ` +
+      `query="${params.query}" logId=${log.id}`,
+    );
 
     try {
-      // ── 2. Fetch raw jobs ─────────────────────────────────
-      const sourceHandler = getSource(source);
-      const rawJobs       = await sourceHandler.fetch(params);
-      result.fetched      = rawJobs.length;
+      // ── 3. Fetch raw jobs ───────────────────────────────────
+      const rawJobs  = await sourceHandler.fetch(params);
+      result.fetched = rawJobs.length;
 
-      logger.info(`[Ingestion] fetched ${rawJobs.length} raw jobs from ${source}`);
+      logger.info(
+        `[Ingestion] fetched ${rawJobs.length} raw jobs from ${source} (${displayName})`,
+      );
 
-      // ── 3. Normalise ──────────────────────────────────────
+      // ── 4. Normalise ────────────────────────────────────────
       const normalisedJobs = sourceHandler.normalizeAll(rawJobs);
 
-      // ── 4. Upsert each job ────────────────────────────────
-      for (const job of normalisedJobs) {
-        const outcome = await this.upsertJob(job);
-        if (outcome === 'created')   result.created++;
-        if (outcome === 'skipped')   result.skipped++;
-        if (outcome === 'failed')    result.failed++;
+      // Warn when normalisation silently dropped records
+      const dropped = rawJobs.length - normalisedJobs.length;
+      if (dropped > 0) {
+        logger.warn(
+          `[Ingestion] normalisation dropped ${dropped} records from ${source}`,
+        );
       }
 
-      // ── 5. Close log — SUCCESS ────────────────────────────
+      // ── 5. Upsert each job ──────────────────────────────────
+      for (const job of normalisedJobs) {
+        const outcome = await this.upsertJob(job);
+        if (outcome === 'created') result.created++;
+        if (outcome === 'skipped') result.skipped++;
+        if (outcome === 'failed')  result.failed++;
+      }
+
+      // ── 6. Close log — SUCCESS ──────────────────────────────
       await prisma.scrapingLog.update({
         where: { id: log.id },
         data:  { status: ScrapingStatus.SUCCESS, jobsFound: result.created },
@@ -78,53 +112,104 @@ export class IngestionService {
 
       logger.info(
         `[Ingestion] run complete — source=${source} ` +
-        `created=${result.created} skipped=${result.skipped} failed=${result.failed}`,
+        `created=${result.created} skipped=${result.skipped} ` +
+        `failed=${result.failed} dropped=${dropped}`,
       );
     } catch (err) {
-      // ── 5. Close log — FAILED ─────────────────────────────
-      const message = err instanceof Error ? err.message : String(err);
+      // ── 6. Close log — FAILED ───────────────────────────────
+      let message: string;
+
+      if (isSourceError(err)) {
+        // Structured error from the source — log the full context
+        message = `[${err.code}] ${err.message}`;
+        logger.error(
+          `[Ingestion] source error — source=${source} code=${err.code} ` +
+          `retryable=${err.isRetryable} message="${err.message}"`,
+          err.context,
+        );
+      } else {
+        message = err instanceof Error ? err.message : String(err);
+        logger.error(`[Ingestion] run failed — source=${source} error="${message}"`);
+      }
+
       result.errors.push(message);
 
       await prisma.scrapingLog.update({
         where: { id: log.id },
         data:  { status: ScrapingStatus.FAILED, error: message },
       });
-
-      logger.error(`[Ingestion] run failed — source=${source} error="${message}"`);
     }
 
     return result;
   }
 
   /**
-   * Run ingestion across every registered source in parallel.
-   * Each source failure is isolated — others continue normally.
+   * Run ingestion across multiple sources sequentially.
+   *
+   * Sequential (not parallel) by default so we respect each source's
+   * rate limit. Each source failure is isolated — others continue normally.
+   *
+   * Pass `{ concurrent: true }` to fan out in parallel when rate limits
+   * are not a concern (e.g. mock sources in tests).
    */
   async runAll(
     userId: string,
     params: IngestionParams,
     sources: JobSource[],
+    options: { concurrent?: boolean } = {},
   ): Promise<IngestionResult[]> {
-    logger.info(`[Ingestion] runAll — sources=[${sources.join(', ')}]`);
-
-    return Promise.all(
-      sources.map((source) => this.run(userId, source, params)),
+    logger.info(
+      `[Ingestion] runAll — sources=[${sources.join(', ')}] ` +
+      `concurrent=${options.concurrent ?? false}`,
     );
+
+    if (options.concurrent) {
+      return Promise.all(sources.map((s) => this.run(userId, s, params)));
+    }
+
+    // Sequential — honour per-source rate limits
+    const results: IngestionResult[] = [];
+    for (const source of sources) {
+      results.push(await this.run(userId, source, params));
+
+      // Insert a cooldown between sources if the source specifies one
+      const handler = this.tryGetHandler(source);
+      const cooldown = handler?.capabilities.rateLimitMs ?? 0;
+      if (cooldown > 0) {
+        logger.debug(`[Ingestion] rate-limit cooldown ${cooldown}ms after ${source}`);
+        await this.sleep(cooldown);
+      }
+    }
+
+    return results;
   }
 
-  // ── Private helpers ─────────────────────────────────────────
+  /**
+   * Convenience method — runs all currently *enabled* registered sources.
+   * Skips sources where `capabilities.enabled` is false.
+   */
+  async runEnabled(
+    userId: string,
+    params: IngestionParams,
+  ): Promise<IngestionResult[]> {
+    const sources = getEnabledSources();
+    logger.info(`[Ingestion] runEnabled — enabled sources=[${sources.join(', ')}]`);
+    return this.runAll(userId, params, sources);
+  }
+
+  // ── Private helpers ──────────────────────────────────────────
 
   /**
    * Attempt to insert one normalised job.
    * - If a job with the same (source, externalId) already exists → skip
-   * - On any other DB error → mark failed (non-fatal, run continues)
+   * - P2002 unique constraint (race condition)                   → skip
+   * - Any other DB error → mark failed (non-fatal, run continues)
    */
   private async upsertJob(
     job: NormalisedJob,
   ): Promise<'created' | 'skipped' | 'failed'> {
     try {
       if (job.externalId) {
-        // Check for existing job — if found, skip silently
         const existing = await prisma.job.findUnique({
           where: {
             source_externalId: { source: job.source, externalId: job.externalId },
@@ -165,7 +250,9 @@ export class IngestionService {
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === 'P2002'
       ) {
-        logger.debug(`[Ingestion] race-condition duplicate skipped — ${job.externalId}`);
+        logger.debug(
+          `[Ingestion] race-condition duplicate skipped — ${job.externalId}`,
+        );
         return 'skipped';
       }
 
@@ -173,6 +260,19 @@ export class IngestionService {
       logger.error(`[Ingestion] failed to persist job "${job.title}": ${message}`);
       return 'failed';
     }
+  }
+
+  /** Safe registry lookup — returns undefined instead of throwing */
+  private tryGetHandler(source: JobSource) {
+    try {
+      return getSource(source);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
 
