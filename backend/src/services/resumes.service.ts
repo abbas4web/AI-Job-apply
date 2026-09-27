@@ -1,9 +1,4 @@
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { PDFParse } = require('pdf-parse') as {
-  PDFParse: new (opts: { data: Uint8Array; verbosity?: number }) => {
-    getText: () => Promise<{ pages: Array<{ text: string }> }>;
-  };
-};
 import { prisma } from '../config/database';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
@@ -213,9 +208,15 @@ export class ResumesService {
     filename: string
   ): Promise<string> {
     try {
+      // Dynamic import so Vitest can mock 'pdf-parse' in tests
+      const { PDFParse } = await import('pdf-parse') as {
+        PDFParse: new (opts: { data: Uint8Array; verbosity?: number }) => {
+          getText: () => Promise<{ pages: Array<{ text: string }> }>;
+        };
+      };
       const parser = new PDFParse({
         data: new Uint8Array(buffer),
-        verbosity: 0, // suppress pdfjs console noise
+        verbosity: 0,
       });
       const result = await parser.getText();
       const text = result.pages.map((p) => p.text).join('\n').trim();
