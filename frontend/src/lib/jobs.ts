@@ -8,7 +8,8 @@ export type JobSource =
   | 'GLASSDOOR'
   | 'COMPANY_SITE'
   | 'REFERRAL'
-  | 'OTHER';
+  | 'OTHER'
+  | 'ARBEITNOW';
 
 export type ApplicationStatus =
   | 'SAVED'
@@ -105,8 +106,9 @@ export const SOURCE_LABELS: Record<JobSource, string> = {
   COMPANY_SITE: 'Company site',
   REFERRAL:     'Referral',
   OTHER:        'Other',
+  ARBEITNOW:    'Arbeitnow',
 };
 
 export const ALL_SOURCES: JobSource[] = [
-  'LINKEDIN', 'INDEED', 'GLASSDOOR', 'COMPANY_SITE', 'REFERRAL', 'OTHER',
+  'LINKEDIN', 'INDEED', 'GLASSDOOR', 'COMPANY_SITE', 'REFERRAL', 'OTHER', 'ARBEITNOW',
 ];

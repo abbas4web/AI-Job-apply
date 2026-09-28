@@ -23,6 +23,7 @@ const sourceColors: Record<string, string> = {
   COMPANY_SITE: 'bg-orange-50 text-orange-700',
   REFERRAL:     'bg-pink-50 text-pink-700',
   OTHER:        'bg-gray-100 text-gray-600',
+  ARBEITNOW:    'bg-teal-50 text-teal-700',
 };
 
 // ── Match score pill ──────────────────────────────────────────

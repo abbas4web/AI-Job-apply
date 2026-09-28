@@ -36,6 +36,7 @@ enum JobSource {
   COMPANY_SITE
   REFERRAL
   OTHER
+  ARBEITNOW
 }
 
 enum ScrapingStatus {

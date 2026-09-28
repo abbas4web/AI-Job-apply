@@ -1,0 +1,4 @@
+-- This migration was applied directly to the database outside the local
+-- migrations directory (via db push or manual SQL). The schema changes it
+-- introduced are already reflected in subsequent local migrations.
+-- This file is a placeholder to reconcile the migration history table.

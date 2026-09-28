@@ -19,6 +19,7 @@ export enum JobSource {
   COMPANY_SITE = 'COMPANY_SITE',
   REFERRAL = 'REFERRAL',
   OTHER = 'OTHER',
+  ARBEITNOW = 'ARBEITNOW',
 }
 
 export enum ScrapingStatus {
